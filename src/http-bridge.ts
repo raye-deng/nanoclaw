@@ -5,6 +5,7 @@ import { ChildProcess } from 'child_process';
 
 import { GROUPS_DIR, DATA_DIR, TIMEZONE } from './config.js';
 import { runContainerAgent, ContainerOutput } from './container-runner.js';
+import { getSession, setSession } from './db.js';
 import { resolveGroupIpcPath } from './group-folder.js';
 import { logger } from './logger.js';
 import { RegisteredGroup } from './types.js';
@@ -27,6 +28,12 @@ export interface HttpBridgeDeps {
   registerGroup: (jid: string, group: RegisteredGroup) => void;
 }
 
+function findMainGroupConfig(
+  groups: Record<string, RegisteredGroup>,
+): RegisteredGroup | undefined {
+  return Object.values(groups).find((g) => g.isMain);
+}
+
 function ensureRingCentralGroup(
   deps: HttpBridgeDeps,
   conversationId: string,
@@ -46,6 +53,8 @@ function ensureRingCentralGroup(
     fs.copyFileSync(globalTemplate, groupMd);
   }
 
+  const mainGroup = findMainGroupConfig(groups);
+
   const group: RegisteredGroup = {
     name: 'RingCentral Bridge',
     folder,
@@ -53,6 +62,7 @@ function ensureRingCentralGroup(
     added_at: new Date().toISOString(),
     requiresTrigger: false,
     isMain: false,
+    containerConfig: mainGroup?.containerConfig,
   };
 
   deps.registerGroup(jid, group);
@@ -139,6 +149,10 @@ export function startHttpBridge(deps: HttpBridgeDeps): http.Server {
   return server;
 }
 
+function sessionKey(conversationId: string): string {
+  return `rc:${conversationId}`;
+}
+
 async function runBridgeAgent(
   group: RegisteredGroup,
   body: BridgeRequest,
@@ -152,11 +166,21 @@ async function runBridgeAgent(
 
   const replies: string[] = [];
   const groupFolder = group.folder;
+  const sKey = sessionKey(conversationId);
+  const sessionId = getSession(sKey);
+
+  logger.info(
+    { conversationId, sessionId: sessionId || 'new' },
+    'HTTP bridge session lookup',
+  );
+
+  let newSessionId: string | undefined;
 
   const output = await runContainerAgent(
     group,
     {
       prompt,
+      sessionId,
       groupFolder,
       chatJid: `rc:${conversationId}`,
       isMain: false,
@@ -166,12 +190,17 @@ async function runBridgeAgent(
       // no-op: we don't need to register with GroupQueue for HTTP bridge
     },
     async (result: ContainerOutput) => {
+      if (result.newSessionId) {
+        newSessionId = result.newSessionId;
+      }
       if (result.result) {
         const text =
           typeof result.result === 'string'
             ? result.result
             : JSON.stringify(result.result);
-        const cleaned = text.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
+        const cleaned = text
+          .replace(/<internal>[\s\S]*?<\/internal>/g, '')
+          .trim();
         if (cleaned) replies.push(cleaned);
       }
       // Write _close sentinel so the container exits after first result
@@ -185,6 +214,18 @@ async function runBridgeAgent(
       }
     },
   );
+
+  // Persist session from streaming output or final output
+  if (!newSessionId && output.newSessionId) {
+    newSessionId = output.newSessionId;
+  }
+  if (newSessionId) {
+    setSession(sKey, newSessionId);
+    logger.info(
+      { conversationId, sessionId: newSessionId },
+      'HTTP bridge session saved',
+    );
+  }
 
   if (output.status === 'error') {
     throw new Error(output.error || 'Container agent failed');
