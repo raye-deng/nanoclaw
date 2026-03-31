@@ -153,7 +153,7 @@ function sessionKey(conversationId: string): string {
   return `rc:${conversationId}`;
 }
 
-async function runBridgeAgent(
+function runBridgeAgent(
   group: RegisteredGroup,
   body: BridgeRequest,
   conversationId: string,
@@ -164,7 +164,6 @@ async function runBridgeAgent(
 
   const prompt = `<context timezone="${TIMEZONE}" />\n<messages>\n<message sender="${sender}" time="${displayTime}">${body.message}</message>\n</messages>`;
 
-  const replies: string[] = [];
   const groupFolder = group.folder;
   const sKey = sessionKey(conversationId);
   const sessionId = getSession(sKey);
@@ -174,71 +173,78 @@ async function runBridgeAgent(
     'HTTP bridge session lookup',
   );
 
-  let newSessionId: string | undefined;
+  return new Promise((resolve, reject) => {
+    let resolved = false;
 
-  const output = await runContainerAgent(
-    group,
-    {
-      prompt,
-      sessionId,
-      groupFolder,
-      chatJid: `rc:${conversationId}`,
-      isMain: false,
-      assistantName: 'Andy',
-    },
-    (_proc: ChildProcess, _containerName: string) => {
-      // no-op: we don't need to register with GroupQueue for HTTP bridge
-    },
-    async (result: ContainerOutput) => {
-      if (result.newSessionId) {
-        newSessionId = result.newSessionId;
+    runContainerAgent(
+      group,
+      {
+        prompt,
+        sessionId,
+        groupFolder,
+        chatJid: `rc:${conversationId}`,
+        isMain: false,
+        assistantName: 'Andy',
+      },
+      (_proc: ChildProcess, _containerName: string) => {},
+      async (result: ContainerOutput) => {
+        if (result.newSessionId) {
+          setSession(sKey, result.newSessionId);
+          logger.info(
+            { conversationId, sessionId: result.newSessionId },
+            'HTTP bridge session saved',
+          );
+        }
+
+        if (!resolved && result.result) {
+          const text =
+            typeof result.result === 'string'
+              ? result.result
+              : JSON.stringify(result.result);
+          const cleaned = text
+            .replace(/<internal>[\s\S]*?<\/internal>/g, '')
+            .trim();
+          if (cleaned) {
+            resolved = true;
+            resolve(cleaned);
+          }
+        }
+
+        // Write _close sentinel so the container exits after first result
+        try {
+          const ipcDir = resolveGroupIpcPath(groupFolder);
+          const inputDir = path.join(ipcDir, 'input');
+          fs.mkdirSync(inputDir, { recursive: true });
+          fs.writeFileSync(path.join(inputDir, '_close'), '');
+        } catch (err) {
+          logger.warn({ err, groupFolder }, 'Failed to write _close sentinel');
+        }
+      },
+    ).then((output) => {
+      // Container finished — resolve if streaming callback didn't already
+      if (!resolved) {
+        if (output.newSessionId) {
+          setSession(sKey, output.newSessionId);
+        }
+        if (output.status === 'error') {
+          reject(new Error(output.error || 'Container agent failed'));
+          return;
+        }
+        if (output.result) {
+          const text =
+            typeof output.result === 'string'
+              ? output.result
+              : JSON.stringify(output.result);
+          const cleaned = text
+            .replace(/<internal>[\s\S]*?<\/internal>/g, '')
+            .trim();
+          resolve(cleaned || '(no response)');
+        } else {
+          resolve('(no response)');
+        }
       }
-      if (result.result) {
-        const text =
-          typeof result.result === 'string'
-            ? result.result
-            : JSON.stringify(result.result);
-        const cleaned = text
-          .replace(/<internal>[\s\S]*?<\/internal>/g, '')
-          .trim();
-        if (cleaned) replies.push(cleaned);
-      }
-      // Write _close sentinel so the container exits after first result
-      try {
-        const ipcDir = resolveGroupIpcPath(groupFolder);
-        const inputDir = path.join(ipcDir, 'input');
-        fs.mkdirSync(inputDir, { recursive: true });
-        fs.writeFileSync(path.join(inputDir, '_close'), '');
-      } catch (err) {
-        logger.warn({ err, groupFolder }, 'Failed to write _close sentinel');
-      }
-    },
-  );
-
-  // Persist session from streaming output or final output
-  if (!newSessionId && output.newSessionId) {
-    newSessionId = output.newSessionId;
-  }
-  if (newSessionId) {
-    setSession(sKey, newSessionId);
-    logger.info(
-      { conversationId, sessionId: newSessionId },
-      'HTTP bridge session saved',
-    );
-  }
-
-  if (output.status === 'error') {
-    throw new Error(output.error || 'Container agent failed');
-  }
-
-  if (replies.length === 0 && output.result) {
-    const text =
-      typeof output.result === 'string'
-        ? output.result
-        : JSON.stringify(output.result);
-    const cleaned = text.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
-    if (cleaned) replies.push(cleaned);
-  }
-
-  return replies.join('\n\n') || '(no response)';
+    }).catch((err) => {
+      if (!resolved) reject(err);
+    });
+  });
 }
