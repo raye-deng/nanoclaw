@@ -47,6 +47,7 @@ import {
 } from './db.js';
 import { GroupQueue } from './group-queue.js';
 import { resolveGroupFolderPath } from './group-folder.js';
+import { startHttpBridge } from './http-bridge.js';
 import { startIpcWatcher } from './ipc.js';
 import { findChannel, formatMessages, formatOutbound } from './router.js';
 import {
@@ -724,6 +725,10 @@ async function main(): Promise<void> {
         writeTasksSnapshot(group.folder, group.isMain === true, taskRows);
       }
     },
+  });
+  startHttpBridge({
+    registeredGroups: () => registeredGroups,
+    registerGroup,
   });
   queue.setProcessMessagesFn(processGroupMessages);
   recoverPendingMessages();
