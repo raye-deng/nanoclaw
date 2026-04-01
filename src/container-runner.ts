@@ -366,10 +366,12 @@ export async function runContainerAgent(
   const mounts = buildVolumeMounts(group, input.isMain);
   const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');
   const containerName = `nanoclaw-${safeName}-${Date.now()}`;
-  // Main group uses the default OneCLI agent; others use their own agent.
-  const agentIdentifier = input.isMain
-    ? undefined
-    : group.folder.toLowerCase().replace(/_/g, '-');
+  // When using direct API key, use the default OneCLI agent (secretMode=all)
+  // so all secrets are available. Otherwise, each group gets its own agent.
+  const agentIdentifier =
+    input.isMain || ANTHROPIC_API_KEY
+      ? undefined
+      : group.folder.toLowerCase().replace(/_/g, '-');
   const containerArgs = await buildContainerArgs(
     mounts,
     containerName,
