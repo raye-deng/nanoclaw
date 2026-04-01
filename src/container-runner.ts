@@ -281,27 +281,35 @@ async function buildContainerArgs(
     args.push('-e', `CLAUDE_MODEL=${CLAUDE_MODEL}`);
   }
 
-  // When ANTHROPIC_API_KEY is set (via .env or environment), inject it directly
-  // and skip OneCLI proxy. Otherwise, use OneCLI gateway for credential injection.
+  // When ANTHROPIC_API_KEY is set, inject it directly instead of relying on
+  // OneCLI for Anthropic credentials.
   if (ANTHROPIC_API_KEY) {
     args.push('-e', `ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}`);
     logger.info(
       { containerName },
-      'ANTHROPIC_API_KEY set — injecting directly, skipping OneCLI',
+      'ANTHROPIC_API_KEY set — injecting directly',
+    );
+  }
+
+  // Always apply OneCLI container config when reachable. Even with a direct
+  // API key, OneCLI manages secrets (e.g. GitLab tokens) that get injected
+  // via its HTTP proxy into container network requests.
+  const onecliApplied = await onecli.applyContainerConfig(args, {
+    addHostMapping: false,
+    agent: agentIdentifier,
+  });
+  if (onecliApplied) {
+    logger.info({ containerName }, 'OneCLI gateway config applied');
+  } else if (!ANTHROPIC_API_KEY) {
+    logger.warn(
+      { containerName },
+      'OneCLI gateway not reachable and no ANTHROPIC_API_KEY set — container will have no credentials',
     );
   } else {
-    const onecliApplied = await onecli.applyContainerConfig(args, {
-      addHostMapping: false,
-      agent: agentIdentifier,
-    });
-    if (onecliApplied) {
-      logger.info({ containerName }, 'OneCLI gateway config applied');
-    } else {
-      logger.warn(
-        { containerName },
-        'OneCLI gateway not reachable and no ANTHROPIC_API_KEY set — container will have no credentials',
-      );
-    }
+    logger.info(
+      { containerName },
+      'OneCLI gateway not reachable — secrets (e.g. GitLab tokens) will not be injected',
+    );
   }
 
   // Runtime-specific args for host gateway resolution
