@@ -45,9 +45,13 @@ function chownRecursiveShallow(dir: string, uid: number, gid: number): void {
         if (entry.isDirectory()) {
           chownRecursiveShallow(full, uid, gid);
         }
-      } catch { /* ignore individual failures */ }
+      } catch {
+        /* ignore individual failures */
+      }
     }
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
 }
 
 // Sentinel markers for robust output parsing (must match agent-runner)
@@ -311,6 +315,20 @@ async function buildContainerArgs(
   if (hostUid != null && hostUid !== 0 && hostUid !== 1000) {
     args.push('--user', `${hostUid}:${hostGid}`);
     args.push('-e', 'HOME=/home/node');
+    // Inject a custom /etc/passwd so SSH and tools calling getpwuid()
+    // can resolve the host UID inside the container.
+    const passwdFile = path.join(DATA_DIR, `passwd-${hostUid}`);
+    try {
+      const lines = [
+        'root:x:0:0:root:/root:/bin/bash',
+        `node:x:1000:1000::/home/node:/bin/bash`,
+        `hostuser:x:${hostUid}:${hostGid}::/home/node:/bin/sh`,
+      ];
+      fs.writeFileSync(passwdFile, lines.join('\n') + '\n');
+      args.push('-v', `${passwdFile}:/etc/passwd:ro`);
+    } catch (err) {
+      logger.warn({ err }, 'Failed to write custom passwd file for container');
+    }
   }
 
   for (const mount of mounts) {
