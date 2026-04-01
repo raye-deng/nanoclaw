@@ -243,20 +243,19 @@ async function buildContainerArgs(
     args.push('-e', `CLAUDE_MODEL=${CLAUDE_MODEL}`);
   }
 
-  // OneCLI gateway handles credential injection — containers never see real secrets.
-  // The gateway intercepts HTTPS traffic and injects API keys or OAuth tokens.
-  const onecliApplied = await onecli.applyContainerConfig(args, {
-    addHostMapping: false, // Nanoclaw already handles host gateway
-    agent: agentIdentifier,
-  });
-  if (onecliApplied) {
-    logger.info({ containerName }, 'OneCLI gateway config applied');
+  // When ANTHROPIC_API_KEY is set, inject it directly and skip OneCLI proxy.
+  // Otherwise, use OneCLI gateway for credential injection.
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (apiKey) {
+    args.push('-e', `ANTHROPIC_API_KEY=${apiKey}`);
+    logger.info({ containerName }, 'ANTHROPIC_API_KEY set — injecting directly, skipping OneCLI');
   } else {
-    // Fallback: inject ANTHROPIC_API_KEY directly when OneCLI is unavailable
-    const apiKey = process.env.ANTHROPIC_API_KEY;
-    if (apiKey) {
-      args.push('-e', `ANTHROPIC_API_KEY=${apiKey}`);
-      logger.info({ containerName }, 'OneCLI unavailable — injected ANTHROPIC_API_KEY directly');
+    const onecliApplied = await onecli.applyContainerConfig(args, {
+      addHostMapping: false,
+      agent: agentIdentifier,
+    });
+    if (onecliApplied) {
+      logger.info({ containerName }, 'OneCLI gateway config applied');
     } else {
       logger.warn(
         { containerName },

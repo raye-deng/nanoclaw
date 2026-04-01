@@ -49,16 +49,16 @@ function ensureRingCentralGroup(
   }
 
   const allowlist = loadMountAllowlist();
-  const containerConfig: ContainerConfig | undefined =
-    allowlist?.allowedRoots?.length
-      ? {
-          additionalMounts: allowlist.allowedRoots.map((root) => ({
-            hostPath: root.path,
-            containerPath: path.basename(root.path),
-            readonly: !root.allowReadWrite,
-          })),
-        }
-      : undefined;
+  const containerConfig: ContainerConfig | undefined = allowlist?.allowedRoots
+    ?.length
+    ? {
+        additionalMounts: allowlist.allowedRoots.map((root) => ({
+          hostPath: root.path,
+          containerPath: path.basename(root.path),
+          readonly: !root.allowReadWrite,
+        })),
+      }
+    : undefined;
 
   const group: RegisteredGroup = {
     name: 'RingCentral Bridge',
