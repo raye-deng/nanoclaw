@@ -5,7 +5,7 @@ import { ChildProcess } from 'child_process';
 
 import { GROUPS_DIR, DATA_DIR, TIMEZONE } from './config.js';
 import { runContainerAgent, ContainerOutput } from './container-runner.js';
-import { getSession, setSession } from './db.js';
+import { deleteSession, getSession, setSession } from './db.js';
 import { resolveGroupIpcPath } from './group-folder.js';
 import { logger } from './logger.js';
 import { loadMountAllowlist } from './mount-security.js';
@@ -179,6 +179,68 @@ async function runBridgeAgent(
     'HTTP bridge session lookup',
   );
 
+  let output = await runBridgeRequest(
+    group,
+    prompt,
+    conversationId,
+    groupFolder,
+    sessionId,
+    replies,
+  );
+
+  if (
+    output.status === 'error' &&
+    sessionId &&
+    output.error?.includes('No conversation found with session ID')
+  ) {
+    logger.warn(
+      { conversationId, sessionId },
+      'HTTP bridge session missing, clearing stale session and retrying',
+    );
+    deleteSession(sKey);
+    replies.length = 0;
+    output = await runBridgeRequest(
+      group,
+      prompt,
+      conversationId,
+      groupFolder,
+      undefined,
+      replies,
+    );
+  }
+
+  if (output.newSessionId) {
+    setSession(sKey, output.newSessionId);
+    logger.info(
+      { conversationId, sessionId: output.newSessionId },
+      'HTTP bridge session saved',
+    );
+  }
+
+  if (output.status === 'error') {
+    throw new Error(output.error || 'Container agent failed');
+  }
+
+  if (replies.length === 0 && output.result) {
+    const text =
+      typeof output.result === 'string'
+        ? output.result
+        : JSON.stringify(output.result);
+    const cleaned = text.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
+    if (cleaned) replies.push(cleaned);
+  }
+
+  return replies.join('\n\n') || '(no response)';
+}
+
+async function runBridgeRequest(
+  group: RegisteredGroup,
+  prompt: string,
+  conversationId: string,
+  groupFolder: string,
+  sessionId: string | undefined,
+  replies: string[],
+): Promise<ContainerOutput> {
   let newSessionId: string | undefined;
 
   const output = await runContainerAgent(
@@ -208,7 +270,6 @@ async function runBridgeAgent(
           .trim();
         if (cleaned) replies.push(cleaned);
       }
-      // Write _close sentinel so the container exits after first result
       try {
         const ipcDir = resolveGroupIpcPath(groupFolder);
         const inputDir = path.join(ipcDir, 'input');
@@ -220,30 +281,12 @@ async function runBridgeAgent(
     },
   );
 
-  // Persist session from streaming output or final output
   if (!newSessionId && output.newSessionId) {
     newSessionId = output.newSessionId;
   }
-  if (newSessionId) {
-    setSession(sKey, newSessionId);
-    logger.info(
-      { conversationId, sessionId: newSessionId },
-      'HTTP bridge session saved',
-    );
-  }
 
-  if (output.status === 'error') {
-    throw new Error(output.error || 'Container agent failed');
-  }
-
-  if (replies.length === 0 && output.result) {
-    const text =
-      typeof output.result === 'string'
-        ? output.result
-        : JSON.stringify(output.result);
-    const cleaned = text.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
-    if (cleaned) replies.push(cleaned);
-  }
-
-  return replies.join('\n\n') || '(no response)';
+  return {
+    ...output,
+    newSessionId,
+  };
 }
