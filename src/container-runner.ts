@@ -33,6 +33,23 @@ import { RegisteredGroup } from './types.js';
 
 const onecli = new OneCLI({ url: ONECLI_URL });
 
+// Recursively chown a directory and its immediate contents (not deep).
+// Used when host runs as root but containers run as uid 1000 (node).
+function chownRecursiveShallow(dir: string, uid: number, gid: number): void {
+  try {
+    fs.chownSync(dir, uid, gid);
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      try {
+        fs.chownSync(full, uid, gid);
+        if (entry.isDirectory()) {
+          chownRecursiveShallow(full, uid, gid);
+        }
+      } catch { /* ignore individual failures */ }
+    }
+  } catch { /* ignore */ }
+}
+
 // Sentinel markers for robust output parsing (must match agent-runner)
 const OUTPUT_START_MARKER = '---NANOCLAW_OUTPUT_START---';
 const OUTPUT_END_MARKER = '---NANOCLAW_OUTPUT_END---';
@@ -127,6 +144,16 @@ function buildVolumeMounts(
     '.claude',
   );
   fs.mkdirSync(groupSessionsDir, { recursive: true });
+
+  // When running as root, the container runs as node (uid 1000) by default.
+  // Ensure writable directories are owned by the container user so Claude SDK
+  // can persist session data, memory, and other files.
+  const hostUid = process.getuid?.();
+  if (hostUid === 0) {
+    for (const dir of [groupSessionsDir, groupDir]) {
+      chownRecursiveShallow(dir, 1000, 1000);
+    }
+  }
   const settingsFile = path.join(groupSessionsDir, 'settings.json');
   if (!fs.existsSync(settingsFile)) {
     fs.writeFileSync(
@@ -174,6 +201,9 @@ function buildVolumeMounts(
   fs.mkdirSync(path.join(groupIpcDir, 'messages'), { recursive: true });
   fs.mkdirSync(path.join(groupIpcDir, 'tasks'), { recursive: true });
   fs.mkdirSync(path.join(groupIpcDir, 'input'), { recursive: true });
+  if (hostUid === 0) {
+    chownRecursiveShallow(groupIpcDir, 1000, 1000);
+  }
   mounts.push({
     hostPath: groupIpcDir,
     containerPath: '/workspace/ipc',
@@ -205,6 +235,9 @@ function buildVolumeMounts(
         fs.statSync(srcIndex).mtimeMs > fs.statSync(cachedIndex).mtimeMs);
     if (needsCopy) {
       fs.cpSync(agentRunnerSrc, groupAgentRunnerDir, { recursive: true });
+    }
+    if (hostUid === 0) {
+      chownRecursiveShallow(groupAgentRunnerDir, 1000, 1000);
     }
   }
   mounts.push({
