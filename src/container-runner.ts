@@ -281,16 +281,6 @@ async function buildContainerArgs(
     args.push('-e', `CLAUDE_MODEL=${CLAUDE_MODEL}`);
   }
 
-  // When ANTHROPIC_API_KEY is set, inject it directly instead of relying on
-  // OneCLI for Anthropic credentials.
-  if (ANTHROPIC_API_KEY) {
-    args.push('-e', `ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}`);
-    logger.info(
-      { containerName },
-      'ANTHROPIC_API_KEY set — injecting directly',
-    );
-  }
-
   // Always apply OneCLI container config when reachable. Even with a direct
   // API key, OneCLI manages secrets (e.g. GitLab tokens) that get injected
   // via its HTTP proxy into container network requests.
@@ -309,6 +299,16 @@ async function buildContainerArgs(
     logger.info(
       { containerName },
       'OneCLI gateway not reachable — secrets (e.g. GitLab tokens) will not be injected',
+    );
+  }
+
+  // Inject ANTHROPIC_API_KEY AFTER OneCLI so it overrides any placeholder
+  // that OneCLI may have set. Docker uses the last -e value for a given key.
+  if (ANTHROPIC_API_KEY) {
+    args.push('-e', `ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}`);
+    logger.info(
+      { containerName },
+      'ANTHROPIC_API_KEY set — injecting directly (overrides OneCLI placeholder)',
     );
   }
 
