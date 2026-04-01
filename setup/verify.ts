@@ -98,11 +98,16 @@ export async function run(_args: string[]): Promise<void> {
 
   // 3. Check credentials
   let credentials = 'missing';
+  let credentialMode = 'none';
   const envFile = path.join(projectRoot, '.env');
   if (fs.existsSync(envFile)) {
     const envContent = fs.readFileSync(envFile, 'utf-8');
-    if (/^(CLAUDE_CODE_OAUTH_TOKEN|ANTHROPIC_API_KEY|ONECLI_URL)=/m.test(envContent)) {
+    if (/^ANTHROPIC_API_KEY=.+/m.test(envContent)) {
       credentials = 'configured';
+      credentialMode = /^ANTHROPIC_BASE_URL=.+/m.test(envContent) ? 'direct_oneapi' : 'direct_api_key';
+    } else if (/^(CLAUDE_CODE_OAUTH_TOKEN|ONECLI_URL)=/m.test(envContent)) {
+      credentials = 'configured';
+      credentialMode = 'onecli';
     }
   }
 
@@ -165,12 +170,21 @@ export async function run(_args: string[]): Promise<void> {
     mountAllowlist = 'configured';
   }
 
-  // Determine overall status
+  // Check if HTTP bridge is reachable (valid even without channels)
+  let httpBridge = 'not_checked';
+  try {
+    execSync('curl -sf --max-time 3 http://127.0.0.1:3929/health', {
+      stdio: 'pipe',
+    });
+    httpBridge = 'reachable';
+  } catch {
+    httpBridge = 'unreachable';
+  }
+
+  // Determine overall status — HTTP bridge-only mode (no channels) is valid
+  const hasEndpoint = anyChannelConfigured || httpBridge === 'reachable';
   const status =
-    service === 'running' &&
-    credentials !== 'missing' &&
-    anyChannelConfigured &&
-    registeredGroups > 0
+    service === 'running' && credentials !== 'missing' && hasEndpoint
       ? 'success'
       : 'failed';
 
@@ -180,6 +194,8 @@ export async function run(_args: string[]): Promise<void> {
     SERVICE: service,
     CONTAINER_RUNTIME: containerRuntime,
     CREDENTIALS: credentials,
+    CREDENTIAL_MODE: credentialMode,
+    HTTP_BRIDGE: httpBridge,
     CONFIGURED_CHANNELS: configuredChannels.join(','),
     CHANNEL_AUTH: JSON.stringify(channelAuth),
     REGISTERED_GROUPS: registeredGroups,

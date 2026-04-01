@@ -233,6 +233,11 @@ function setupSystemd(
     systemctlPrefix = 'systemctl --user';
   }
 
+  const envFile = path.join(projectRoot, '.env');
+  const envFileLine = fs.existsSync(envFile)
+    ? `EnvironmentFile=${envFile}\n`
+    : '';
+
   const unit = `[Unit]
 Description=NanoClaw Personal Assistant
 After=network.target
@@ -241,7 +246,7 @@ After=network.target
 Type=simple
 ExecStart=${nodePath} ${projectRoot}/dist/index.js
 WorkingDirectory=${projectRoot}
-Restart=always
+${envFileLine}Restart=always
 RestartSec=5
 KillMode=process
 Environment=HOME=${homeDir}

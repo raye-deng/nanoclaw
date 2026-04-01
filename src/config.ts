@@ -12,6 +12,7 @@ const envConfig = readEnvFile([
   'TZ',
   'CLAUDE_MODEL',
   'ANTHROPIC_BASE_URL',
+  'ANTHROPIC_API_KEY',
 ]);
 
 export const ASSISTANT_NAME =
@@ -103,3 +104,6 @@ export const CLAUDE_MODEL =
 
 export const ANTHROPIC_BASE_URL =
   process.env.ANTHROPIC_BASE_URL || envConfig.ANTHROPIC_BASE_URL || '';
+
+export const ANTHROPIC_API_KEY =
+  process.env.ANTHROPIC_API_KEY || envConfig.ANTHROPIC_API_KEY || '';

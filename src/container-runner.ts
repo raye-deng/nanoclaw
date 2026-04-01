@@ -7,6 +7,7 @@ import fs from 'fs';
 import path from 'path';
 
 import {
+  ANTHROPIC_API_KEY,
   ANTHROPIC_BASE_URL,
   CLAUDE_MODEL,
   CONTAINER_IMAGE,
@@ -243,12 +244,14 @@ async function buildContainerArgs(
     args.push('-e', `CLAUDE_MODEL=${CLAUDE_MODEL}`);
   }
 
-  // When ANTHROPIC_API_KEY is set, inject it directly and skip OneCLI proxy.
-  // Otherwise, use OneCLI gateway for credential injection.
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (apiKey) {
-    args.push('-e', `ANTHROPIC_API_KEY=${apiKey}`);
-    logger.info({ containerName }, 'ANTHROPIC_API_KEY set — injecting directly, skipping OneCLI');
+  // When ANTHROPIC_API_KEY is set (via .env or environment), inject it directly
+  // and skip OneCLI proxy. Otherwise, use OneCLI gateway for credential injection.
+  if (ANTHROPIC_API_KEY) {
+    args.push('-e', `ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}`);
+    logger.info(
+      { containerName },
+      'ANTHROPIC_API_KEY set — injecting directly, skipping OneCLI',
+    );
   } else {
     const onecliApplied = await onecli.applyContainerConfig(args, {
       addHostMapping: false,

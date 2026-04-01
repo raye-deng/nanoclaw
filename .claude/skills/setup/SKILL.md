@@ -48,6 +48,14 @@ git remote add upstream https://github.com/qwibitai/nanoclaw.git
 
 Already configured. Continue.
 
+**Case D — `origin` points to a third-party fork (not qwibitai, not the current user's personal fork):**
+
+This is a shared/team deployment using a custom fork (e.g. `raye-deng/nanoclaw` for RingCentral integration). Keep `origin` as-is. Add upstream if missing:
+```bash
+git remote add upstream https://github.com/qwibitai/nanoclaw.git 2>/dev/null || true
+```
+Continue without modification — the fork maintainer manages their own branch.
+
 **Verify:** `git remote -v` should show `origin` → user's repo, `upstream` → `qwibitai/nanoclaw.git`.
 
 ## 1. Bootstrap (Node.js + Dependencies)
@@ -125,6 +133,16 @@ Run `npx tsx setup/index.ts --step container -- --runtime <chosen>` and parse th
 ## 4. Credential System
 
 The credential system depends on the container runtime chosen in step 3.
+
+AskUserQuestion: How do you want to authenticate with the AI model API?
+
+1. **OneCLI (recommended for personal use)** — description: "Manages credentials via a local gateway. Supports Claude subscriptions and API keys. Installs a small local service."
+2. **Direct API Key + Custom Endpoint (for teams/servers)** — description: "Directly configure an API key and endpoint URL (e.g. OneAPI, Azure, or any OpenAI-compatible proxy). No OneCLI needed. Best for shared server deployments."
+3. **Direct Anthropic API Key** — description: "Use an Anthropic API key directly without OneCLI. Simpler setup for single-user deployments."
+
+If option 1 → proceed to 4a.
+If option 2 → proceed to 4c.
+If option 3 → proceed to 4d.
 
 ### 4a. Docker → OneCLI
 
@@ -223,13 +241,70 @@ echo 'ANTHROPIC_API_KEY=<their-key>' >> .env
 
 Verify the proxy starts: `npm run dev` should show "Credential proxy listening" in the logs.
 
+### 4c. Direct API Key + Custom Endpoint (OneAPI / Compatible Proxy)
+
+For team/server deployments using an OpenAI-compatible API proxy (e.g. OneAPI, LiteLLM, Azure OpenAI).
+
+Ask the user for three values:
+1. **API Endpoint URL** — e.g. `https://oneapi.int.rclabenv.com`
+2. **API Key** — the key for the proxy
+3. **Model name** — the model identifier on the proxy (e.g. `gpt-5.4`, `claude-sonnet-4-20250514`)
+
+Write to `.env`:
+```bash
+echo 'ANTHROPIC_BASE_URL=<endpoint>' >> .env
+echo 'ANTHROPIC_API_KEY=<key>' >> .env
+echo 'CLAUDE_MODEL=<model>' >> .env
+```
+
+OneCLI is still installed (it's part of the standard setup), but NanoClaw will bypass its proxy when `ANTHROPIC_API_KEY` is set in `.env`, injecting the key directly into containers.
+
+Install OneCLI as normal (it provides the management dashboard and is used for access rules):
+```bash
+curl -fsSL onecli.sh/install | sh
+curl -fsSL onecli.sh/cli/install | sh
+export PATH="$HOME/.local/bin:$PATH"
+grep -q '.local/bin' ~/.bashrc 2>/dev/null || echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+onecli config set api-host http://127.0.0.1:10254
+grep -q 'ONECLI_URL' .env 2>/dev/null || echo 'ONECLI_URL=http://127.0.0.1:10254' >> .env
+```
+
+Create the Anthropic secret in OneCLI so the dashboard shows it (even though it's bypassed for containers):
+```bash
+onecli secrets create --name Anthropic --type anthropic --value <key> --host-pattern <endpoint-host>
+```
+Where `<endpoint-host>` is extracted from the URL (e.g. `oneapi.int.rclabenv.com`).
+
+Verify: `cat .env` should show `ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY`, and `CLAUDE_MODEL`.
+
+**Important:** Tell the user:
+- OneCLI Dashboard is available at `http://<server-ip>:10254` for managing access rules
+- NanoClaw HTTP bridge endpoint is at `http://<server-ip>:3929/message`
+- These ports should be accessible from the network if other services need to call them
+
+### 4d. Direct Anthropic API Key (No Custom Endpoint)
+
+For simple single-user deployments using the standard Anthropic API.
+
+Ask the user for their API key (from https://console.anthropic.com/settings/keys).
+
+Write to `.env`:
+```bash
+echo 'ANTHROPIC_API_KEY=<key>' >> .env
+```
+
+OneCLI is still installed but bypassed for container credential injection. Install it as in 4c for dashboard access.
+
 ## 5. Set Up Channels
 
 AskUserQuestion (multiSelect): Which messaging channels do you want to enable?
+- None (HTTP bridge only) — NanoClaw will run as an HTTP API at port 3929, usable by external services like RingClaw
 - WhatsApp (authenticates via QR code or pairing code)
 - Telegram (authenticates via bot token from @BotFather)
 - Slack (authenticates via Slack app with Socket Mode)
 - Discord (authenticates via Discord bot token)
+
+**If "None" is selected:** No channel setup needed. NanoClaw will start in HTTP bridge-only mode, exposing `POST /message` at `http://127.0.0.1:3929/message`. Skip channel skill invocations and proceed to step 6.
 
 **Delegate to each selected channel's own skill.** Each channel skill handles its own code installation, authentication, registration, and JID resolution. This avoids duplicating channel-specific logic and ensures JIDs are always correct.
 
@@ -299,12 +374,21 @@ Run `npx tsx setup/index.ts --step verify` and parse the status block.
 **If STATUS=failed, fix each:**
 - SERVICE=stopped → `npm run build`, then restart: `launchctl kickstart -k gui/$(id -u)/com.nanoclaw` (macOS) or `systemctl --user restart nanoclaw` (Linux) or `bash start-nanoclaw.sh` (WSL nohup)
 - SERVICE=not_found → re-run step 7
-- CREDENTIALS=missing → re-run step 4 (Docker: check `onecli secrets list`; Apple Container: check `.env` for credentials)
+- CREDENTIALS=missing → re-run step 4. Check CREDENTIAL_MODE in output:
+  - `onecli` → check `onecli secrets list`
+  - `direct_oneapi` or `direct_api_key` → check `.env` for `ANTHROPIC_API_KEY`
+  - Apple Container → check `.env` for credentials
 - CHANNEL_AUTH shows `not_found` for any channel → re-invoke that channel's skill (e.g. `/add-telegram`)
-- REGISTERED_GROUPS=0 → re-invoke the channel skills from step 5
+- HTTP_BRIDGE=unreachable and no channels configured → service may not have started properly. Check `logs/nanoclaw.error.log`
+- REGISTERED_GROUPS=0 and HTTP_BRIDGE=unreachable → re-invoke the channel skills from step 5 or verify HTTP bridge is listening
 - MOUNT_ALLOWLIST=missing → `npx tsx setup/index.ts --step mounts -- --empty`
 
-Tell user to test: send a message in their registered chat. Show: `tail -f logs/nanoclaw.log`
+**If HTTP bridge-only mode:** Tell the user:
+- HTTP bridge endpoint: `http://<server-ip>:3929/message` (POST with `{"conversation_id":"...","message":"...","sender":"..."}`)
+- OneCLI Dashboard: `http://<server-ip>:10254` (for managing access rules)
+- Test with: `curl -s -X POST http://127.0.0.1:3929/message -H "Content-Type: application/json" -d '{"conversation_id":"test","message":"say hi","sender":"User"}'`
+
+Tell user to test: send a message in their registered chat or via HTTP bridge. Show: `tail -f logs/nanoclaw.log`
 
 ## Troubleshooting
 
