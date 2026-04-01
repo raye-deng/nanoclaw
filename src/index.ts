@@ -689,8 +689,7 @@ async function main(): Promise<void> {
     await channel.connect();
   }
   if (channels.length === 0) {
-    logger.fatal('No channels connected');
-    process.exit(1);
+    logger.warn('No channels connected — running in HTTP bridge-only mode');
   }
 
   // Start subsystems (independently of connection handler)

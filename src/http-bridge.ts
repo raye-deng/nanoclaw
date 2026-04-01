@@ -8,7 +8,8 @@ import { runContainerAgent, ContainerOutput } from './container-runner.js';
 import { getSession, setSession } from './db.js';
 import { resolveGroupIpcPath } from './group-folder.js';
 import { logger } from './logger.js';
-import { RegisteredGroup } from './types.js';
+import { loadMountAllowlist } from './mount-security.js';
+import { ContainerConfig, RegisteredGroup } from './types.js';
 
 const DEFAULT_PORT = 3929;
 const MAX_BODY_SIZE = 1 << 20; // 1MB
@@ -26,12 +27,6 @@ interface BridgeRequest {
 export interface HttpBridgeDeps {
   registeredGroups: () => Record<string, RegisteredGroup>;
   registerGroup: (jid: string, group: RegisteredGroup) => void;
-}
-
-function findMainGroupConfig(
-  groups: Record<string, RegisteredGroup>,
-): RegisteredGroup | undefined {
-  return Object.values(groups).find((g) => g.isMain);
 }
 
 function ensureRingCentralGroup(
@@ -53,7 +48,17 @@ function ensureRingCentralGroup(
     fs.copyFileSync(globalTemplate, groupMd);
   }
 
-  const mainGroup = findMainGroupConfig(groups);
+  const allowlist = loadMountAllowlist();
+  const containerConfig: ContainerConfig | undefined =
+    allowlist?.allowedRoots?.length
+      ? {
+          additionalMounts: allowlist.allowedRoots.map((root) => ({
+            hostPath: root.path,
+            containerPath: path.basename(root.path),
+            readonly: !root.allowReadWrite,
+          })),
+        }
+      : undefined;
 
   const group: RegisteredGroup = {
     name: 'RingCentral Bridge',
@@ -62,7 +67,7 @@ function ensureRingCentralGroup(
     added_at: new Date().toISOString(),
     requiresTrigger: false,
     isMain: false,
-    containerConfig: mainGroup?.containerConfig,
+    containerConfig,
   };
 
   deps.registerGroup(jid, group);

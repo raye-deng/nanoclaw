@@ -10,6 +10,8 @@ const envConfig = readEnvFile([
   'ASSISTANT_HAS_OWN_NUMBER',
   'ONECLI_URL',
   'TZ',
+  'CLAUDE_MODEL',
+  'ANTHROPIC_BASE_URL',
 ]);
 
 export const ASSISTANT_NAME =
@@ -95,3 +97,9 @@ function resolveConfigTimezone(): string {
   return 'UTC';
 }
 export const TIMEZONE = resolveConfigTimezone();
+
+export const CLAUDE_MODEL =
+  process.env.CLAUDE_MODEL || envConfig.CLAUDE_MODEL || '';
+
+export const ANTHROPIC_BASE_URL =
+  process.env.ANTHROPIC_BASE_URL || envConfig.ANTHROPIC_BASE_URL || '';

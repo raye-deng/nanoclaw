@@ -7,6 +7,8 @@ import fs from 'fs';
 import path from 'path';
 
 import {
+  ANTHROPIC_BASE_URL,
+  CLAUDE_MODEL,
   CONTAINER_IMAGE,
   CONTAINER_MAX_OUTPUT_SIZE,
   CONTAINER_TIMEOUT,
@@ -233,6 +235,14 @@ async function buildContainerArgs(
   // Pass host timezone so container's local time matches the user's
   args.push('-e', `TZ=${TIMEZONE}`);
 
+  // Forward API endpoint and model so the container uses the correct configuration
+  if (ANTHROPIC_BASE_URL) {
+    args.push('-e', `ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL}`);
+  }
+  if (CLAUDE_MODEL) {
+    args.push('-e', `CLAUDE_MODEL=${CLAUDE_MODEL}`);
+  }
+
   // OneCLI gateway handles credential injection — containers never see real secrets.
   // The gateway intercepts HTTPS traffic and injects API keys or OAuth tokens.
   const onecliApplied = await onecli.applyContainerConfig(args, {
@@ -242,10 +252,17 @@ async function buildContainerArgs(
   if (onecliApplied) {
     logger.info({ containerName }, 'OneCLI gateway config applied');
   } else {
-    logger.warn(
-      { containerName },
-      'OneCLI gateway not reachable — container will have no credentials',
-    );
+    // Fallback: inject ANTHROPIC_API_KEY directly when OneCLI is unavailable
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    if (apiKey) {
+      args.push('-e', `ANTHROPIC_API_KEY=${apiKey}`);
+      logger.info({ containerName }, 'OneCLI unavailable — injected ANTHROPIC_API_KEY directly');
+    } else {
+      logger.warn(
+        { containerName },
+        'OneCLI gateway not reachable and no ANTHROPIC_API_KEY set — container will have no credentials',
+      );
+    }
   }
 
   // Runtime-specific args for host gateway resolution
